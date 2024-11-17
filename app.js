@@ -77,6 +77,7 @@ async function extractPricesData(pricesFiles) {
 
     result.push(folderPrices);
   }
+  console.log(result);
   return result;
 }
 
@@ -124,62 +125,81 @@ async function insertImages(workbook, sheet, headers, imgSourceDir) {
 }
 
 async function writeInResultTable(sourceTablePath, resultTablePath) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(sourceTablePath);
-  const sheet = workbook.worksheets[0];
+  try {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(sourceTablePath);
+    const sheet = workbook.worksheets[0];
+    const newSheet = workbook.addWorksheet('TempSheet');
+    const notFoundProducts = new Set();
 
-  const newSheet = workbook.addWorksheet('TempSheet');
-  sheet.eachRow((row, rowNumber) => {
-    const newRow = newSheet.getRow(rowNumber);
-    row.eachCell((cell, colNumber) => {
-      const newCell = newRow.getCell(colNumber);
-      newCell.style = { ...cell.style };
-      newCell.value = cell.value;
+    sheet.eachRow((row, rowNumber) => {
+      const newRow = newSheet.getRow(rowNumber);
+      row.eachCell((cell, colNumber) => {
+        const newCell = newRow.getCell(colNumber);
+        newCell.style = { ...cell.style };
+        newCell.value = cell.value;
+      });
     });
-  });
 
-  const headers = [];
-  const headerRow = newSheet.getRow(1);
-  headerRow.eachCell((cell, colNumber) => {
-    headers[colNumber - 1] = cell.value;
-  });
+    const headers = [];
+    const headerRow = newSheet.getRow(1);
+    headerRow.eachCell((cell, colNumber) => {
+      headers[colNumber - 1] = cell.value;
+    });
 
-  const suppliersData = await extractPricesData(
-    await findPricesFiles(soursDir)
-  );
+    const suppliersData = await extractPricesData(
+      await findPricesFiles(soursDir)
+    );
 
-  // Обновляем цены
-  newSheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
-    const productName = row.getCell(1).value;
+    // Обновляем цены
+    newSheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const productName = row.getCell(1).value;
+      let foundInAnySupplier = false;
 
-    for (const supplier of suppliersData) {
-      const supplierColumnIndex = headers.findIndex(
-        (header) => header === supplier.folderName
-      );
-      if (supplierColumnIndex !== -1) {
-        const price = supplier.prices[productName];
-        if (price !== undefined) {
-          const cell = row.getCell(supplierColumnIndex + 1);
-          cell.value = Number(price);
+      for (const supplier of suppliersData) {
+        const supplierColumnIndex = headers.findIndex(
+          (header) => header === supplier.folderName
+        );
+        if (supplierColumnIndex !== -1) {
+          const price = supplier.prices[productName];
+          if (price !== undefined) {
+            const cell = row.getCell(supplierColumnIndex + 1);
+            cell.value = Number(price);
+            cell.numFmt = '¥#,##0.00';
+            cell.alignment = { horizontal: 'center' };
+            foundInAnySupplier = true;
+          }
         }
       }
+
+      if (!foundInAnySupplier) {
+        notFoundProducts.add(productName);
+      }
+    });
+    // После создания нового листа и до записи файла
+    headers.forEach((header, index) => {
+      const column = newSheet.getColumn(index + 1);
+      column.width = 15;
+    });
+    const komment = headers.findIndex((header) => header === 'Комментарий') + 1;
+    newSheet.getColumn(komment).width = 30;
+    // Вставляем изображения
+    await insertImages(workbook, newSheet, headers, imgSourceDir);
+
+    workbook.removeWorksheet(sheet.id);
+    newSheet.name = sheet.name;
+
+    await workbook.xlsx.writeFile(resultTablePath);
+    console.log('✅ Файл сохранен по пути:', resultTablePath);
+    if (notFoundProducts.size > 0) {
+      console.log('\n❌ Следующие товары не найдены в прайс-листах:');
+      notFoundProducts.forEach((product) => console.log(`- ${product}`));
     }
-  });
-  // После создания нового листа и до записи файла
-  headers.forEach((header, index) => {
-    const column = newSheet.getColumn(index + 1);
-    column.width = 15;
-  });
-  const komment = headers.findIndex((header) => header === 'Комментарий') + 1;
-  newSheet.getColumn(komment).width = 30;
-  // Вставляем изображения
-  await insertImages(workbook, newSheet, headers, imgSourceDir);
-
-  workbook.removeWorksheet(sheet.id);
-  newSheet.name = sheet.name;
-
-  await workbook.xlsx.writeFile(resultTablePath);
+  } catch (error) {
+    console.error('❌ Произошла ошибка при обработке файла:', error.message);
+    throw error;
+  }
 }
 
 // Вызов функции с двумя путями
